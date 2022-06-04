@@ -2,10 +2,13 @@
 
 Currently there are two examples in the source folder:
 * helloWorld - a C++ sample that shows how to connect to an Omniverse Nucleus server, create a USD stage, create a polygonal box, bind a material, add a light, save data to .usd file, and do live edits
+* helloWorldPhysics - a C++ sample that shows how to connect to an Omniverse Nucleus server, create a USD stage, create a dynamic rigid body cube, static quad collider and a physics scene, save data to .usd file
 * pyHelloWorld - demonstrates all of the same things from the C++ sample in Python
 * omnicli - a very useful command line utility to manage files on an Omniverse Nucleus server
 * omniUsdaWatcher - a live USD watcher that outputs a constantly updating USDA file on disk
 * omniUSDReader - a very very simple program for build config demonstration that opens a stage and traverses it, printing all of the prims
+* omniSimpleSensor - a simple example of simulating sensor data pushed into a USD
+* omniSensorThread - a thread worker to change the color (sensor) data on a layer in the USD from SimpleSensor
 
 ## Using the prebuilt package from the Omniverse Launcher
 
@@ -74,6 +77,19 @@ If a user wants the generated projects to use a different Windows 10 SDK than wh
 * `winsdk_lib`
 
 Note that an installed Windows SDK will have the actual version in all of these paths, for example `include/10.0.17763.0` rather than just `include`
+
+
+## Issues with Self-Signed Certs
+If the scripts from the Connect Sample fail due to self-signed cert issues, a possible workaround would be to do this:
+
+Install python-certifi-win32 which allows the windows certificate store to be used for TLS/SSL requests:
+
+```bash
+%PM_PYTHON% -m pip install python-certifi-win32 --trusted-host pypi.org --trusted-host files.pythonhosted.org
+```
+
+Note the %PM_PYTHON% is an environment variable set by the build script.
+
 
 
 ## Documentation and learning resources for USD and Omniverse

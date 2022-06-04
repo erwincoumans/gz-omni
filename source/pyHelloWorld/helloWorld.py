@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 ###############################################################################
 #
 # Copyright 2020 NVIDIA Corporation
@@ -21,17 +23,34 @@
 #
 ###############################################################################
 
-import omni.client
-from pxr import Gf, Kind, Sdf, Usd, UsdLux, UsdGeom, UsdShade
-import math
+# Python built-in
 import argparse
+import logging
+import math
+import sys
 
-connectionStatusSubscription = None
+# USD imports
+from pxr import Gf, Sdf, Usd, UsdLux, UsdGeom, UsdShade, UsdPhysics
+
+# Omni imports
+import omni.client
+
+# Internal imports
+import log, xform_utils
+
+
+connection_status_subscription = None
 stage = None
 
+
+LOGGER = log.get_logger("PyHelloWorld", level=logging.INFO)
+
+
 def logCallback(threadName, component, level, message):
-    if loggingEnabled:
-        print(message)
+    if logging_enabled:
+        LOGGER.setLevel(logging.DEBUG)
+        xform_utils.LOGGER.setLevel(logging.DEBUG)
+        LOGGER.debug(message)
 
 
 def connectionStatusCallback(url, connectionStatus):
@@ -41,13 +60,13 @@ def connectionStatusCallback(url, connectionStatus):
 
 def startOmniverse(doLiveEdit):
     omni.client.set_log_callback(logCallback)
-    if loggingEnabled:
+    if logging_enabled:
         omni.client.set_log_level(omni.client.LogLevel.DEBUG)
 
     if not omni.client.initialize():
         sys.exit("[ERROR] Unable to initialize Omniverse client, exiting.")
 
-    connectionStatusSubscription = omni.client.register_connection_status_callback(connectionStatusCallback)
+    connection_status_subscription = omni.client.register_connection_status_callback(connectionStatusCallback)
 
     omni.client.usd_live_set_default_enabled(doLiveEdit)
 
@@ -55,7 +74,7 @@ def startOmniverse(doLiveEdit):
 def shutdownOmniverse():
     omni.client.usd_live_wait_for_pending_updates()
 
-    connectionStatusSubscription = None
+    connection_status_subscription = None
 
     omni.client.shutdown()
 
@@ -68,8 +87,8 @@ def isValidOmniUrl(url):
 
 
 def createOmniverseModel(path):
-    print("Creating Omniverse stage")
-    global context, stage
+    LOGGER.info("Creating Omniverse stage")
+    global stage
 
     stageUrl = path + "/helloworld_py.usd"
     omni.client.delete(stageUrl)
@@ -78,7 +97,7 @@ def createOmniverseModel(path):
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
     UsdGeom.SetStageMetersPerUnit(stage, 0.01)
 
-    print("Created stage:", stageUrl)
+    LOGGER.info("Created stage: %s", stageUrl)
 
     return stageUrl
 
@@ -90,18 +109,110 @@ def checkpointFile(stageUrl, comment):
         return
 
     result, serverInfo = omni.client.get_server_info(stageUrl)
-    
+
     if result and serverInfo and serverInfo.checkpoints_enabled:
         bForceCheckpoint = True
-        print("Adding checkpoint comment <%s> to stage <%s>" % (comment, stageUrl))
+        LOGGER.info("Adding checkpoint comment <%s> to stage <%s>", comment, stageUrl)
         omni.client.create_checkpoint(stageUrl, comment, bForceCheckpoint)
 
 
-def printConnectedUsername(stageUrl):
-    result, serverInfo = omni.client.get_server_info(stageUrl)
+def logConnectedUsername(stageUrl):
+    _, serverInfo = omni.client.get_server_info(stageUrl)
 
     if serverInfo:
-        print("Connected username:", serverInfo.username)
+        LOGGER.info("Connected username: %s", serverInfo.username)
+
+
+def createPhysicsScene(rootUrl):
+    global stage
+
+    sceneName = "/physicsScene"
+    scenePrimPath = rootUrl + sceneName
+
+	# Create physics scene, note that we dont have to specify gravity
+    # the default value is derived based on the scene up Axis and meters per unit.
+	# Hence in this case the gravity would be (0.0, -981.0, 0.0) since we have
+	# defined the Y up-axis and we are having a scene in centimeters.
+    UsdPhysics.Scene.Define(stage, scenePrimPath)
+
+def enablePhysics(prim, dynamic):
+	if dynamic:
+		# Make the cube a physics rigid body dynamic
+		UsdPhysics.RigidBodyAPI.Apply(prim)
+
+	# Add collision
+	UsdPhysics.CollisionAPI.Apply(prim)
+
+	if prim.IsA(UsdGeom.Mesh):
+		meshCollisionAPI = UsdPhysics.MeshCollisionAPI.Apply(prim)
+		if dynamic:
+			# set mesh approximation to convexHull for dynamic meshes
+			meshCollisionAPI.GetApproximationAttr().Set(UsdPhysics.Tokens.convexHull)
+		else:
+			# set mesh approximation to none - triangle mesh as is will be used
+			meshCollisionAPI.GetApproximationAttr().Set(UsdPhysics.Tokens.none)
+
+# create dynamic cube
+def createDynamicCube(stageUrl, rootUrl, size):
+    global stage
+	# Create the geometry inside of "Root"
+    cubeName = "/cube"
+    cubePrimPath = rootUrl + cubeName
+    cube = UsdGeom.Cube.Define(stage, cubePrimPath)
+
+    if not cube:
+        sys.exit("[ERROR] Failure to create cube")
+
+	# Move it up
+    cube.AddTranslateOp().Set(Gf.Vec3f(65.0, 300.0, 65.0))
+
+    cube.GetSizeAttr().Set(size)
+
+    enablePhysics(cube.GetPrim(), True)
+
+	# Commit the changes to the USD
+    save_stage(stageUrl)
+
+# Create a simple quad in USD with normals and add a collider
+def createQuad(stageUrl, rootUrl, size):
+    global stage
+	# Create the geometry inside of "Root"
+    quadName = "/quad"
+    quadPrimPath = rootUrl + quadName
+    mesh = UsdGeom.Mesh.Define(stage, quadPrimPath)
+
+    if not mesh:
+        sys.exit("[ERROR] Failure to create cube")
+
+	# Add all of the vertices
+    points = [
+		Gf.Vec3f(-size, 0.0, -size),
+		Gf.Vec3f(-size, 0.0, size),
+		Gf.Vec3f(size, 0.0, size),
+		Gf.Vec3f(size, 0.0, -size)]
+    mesh.CreatePointsAttr(points)
+
+	# Calculate indices for each triangle
+    vecIndices = [ 0, 1, 2, 3 ]
+    mesh.CreateFaceVertexIndicesAttr(vecIndices)
+
+	# Add vertex normals
+    meshNormals = [
+		Gf.Vec3f(0.0, 0.0, 1.0),
+		Gf.Vec3f(0.0, 0.0, 1.0),
+		Gf.Vec3f(0.0, 0.0, 1.0),
+		Gf.Vec3f(0.0, 0.0, 1.0) ]
+    mesh.CreateNormalsAttr(meshNormals)
+
+	# Add face vertex count
+    faceVertexCounts = [ 4 ]
+    mesh.CreateFaceVertexCountsAttr(faceVertexCounts)
+
+	# set is as a static triangle mesh
+    enablePhysics(mesh.GetPrim(), False)
+
+	# Commit the changes to the USD
+    save_stage(stageUrl)
 
 h = 50.0
 boxVertexIndices = [ 0,  1,  2,  1,  3,  2,
@@ -130,20 +241,14 @@ boxUVs = [ (0, 0), (0, 1), (1, 1), (1, 0),
            (0, 0), (0, 1), (1, 1), (1, 0),
            (0, 0), (0, 1), (1, 1), (1, 0) ]
 
-def saveStage(stageUrl):
+def save_stage(stageUrl):
     global stage
     stage.GetRootLayer().Save()
     omni.client.usd_live_process()
 
-def createBox(stageUrl, boxNumber=0):
+def createBox(stageUrl, rootUrl, boxNumber=0):
     global stage
-    rootUrl = '/Root'
     boxUrl = rootUrl + '/box_%d' % boxNumber
-
-    xformPrim = UsdGeom.Xform.Define(stage, rootUrl)
-    # Define the defaultPrim as the /Root prim
-    rootPrim = stage.GetPrimAtPath(rootUrl)
-    stage.SetDefaultPrim(rootPrim)
 
     boxPrim = UsdGeom.Mesh.Define(stage, boxUrl)
 
@@ -158,31 +263,41 @@ def createBox(stageUrl, boxNumber=0):
 
     if not boxPrim:
         sys.exit("[ERROR] Failure to create box")
-    
-    saveStage(stageUrl)
+
+    # Set init transformation
+    srt_action = xform_utils.TransformPrimSRT(
+        stage,
+        boxPrim.GetPath(),
+        translation=Gf.Vec3d(0.0, 100.0, 0.0),
+        rotation_euler=Gf.Vec3d(20.0, 0.0, 20.0),
+    )
+    srt_action.do()
+
+    enablePhysics(boxPrim.GetPrim(), True)
+
+    save_stage(stageUrl)
 
     return boxPrim
 
-def findGeomMesh(existingStage, boxNumber=0):
+def findGeomMesh(existing_stage, boxNumber=0):
     global stage
-    print(existingStage)
+    LOGGER.debug(existing_stage)
 
-    stage = Usd.Stage.Open(existingStage)
+    stage = Usd.Stage.Open(existing_stage)
 
     if not stage:
-        sys.exit("[ERROR] Unable to open stage" + existingStage)
+        sys.exit("[ERROR] Unable to open stage" + existing_stage)
 
     #meshPrim = stage.GetPrimAtPath('/Root/box_%d' % boxNumber)
     for node in stage.Traverse():
         if node.IsA(UsdGeom.Mesh):
             return UsdGeom.Mesh(node)
 
-    sys.exit("[ERROR] No UsdGeomMesh found in stage:", existingStage)
+    sys.exit("[ERROR] No UsdGeomMesh found in stage:", existing_stage)
     return None
 
-
-def uploadMaterial(destinationPath):
-    uriPath = destinationPath + "/Materials"
+def uploadMaterial(destination_path):
+    uriPath = destination_path + "/Materials"
     omni.client.delete(uriPath)
     omni.client.copy("resources/Materials", uriPath)
 
@@ -246,7 +361,7 @@ def createMaterial(mesh, stageUrl):
 
     UsdShade.MaterialBindingAPI(mesh).Bind(newMat)
 
-    saveStage(stageUrl)
+    save_stage(stageUrl)
 
 
 # Create a distant light in the scene.
@@ -256,7 +371,7 @@ def createDistantLight(stageUrl):
     newLight.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 0.745))
     newLight.CreateIntensityAttr(5000.0)
 
-    saveStage(stageUrl)
+    save_stage(stageUrl)
 
 
 # Create a dome light in the scene.
@@ -268,17 +383,18 @@ def createDomeLight(stageUrl, texturePath):
 
     # Set rotation on domelight
     xForm = newLight
-    rotateOp = xForm.AddXformOp(UsdGeom.XformOp.TypeRotateZYX, UsdGeom.XformOp.PrecisionFloat)
-    rotateOp.Set(Gf.Vec3f(270, 0, 0))
+    rotateOp = xForm.AddXformOp(UsdGeom.XformOp.TypeRotateXYZ, UsdGeom.XformOp.PrecisionDouble)
+    rotateOp.Set(Gf.Vec3d(270, 0, 0))
 
-    saveStage(stageUrl)
+    save_stage(stageUrl)
 
 
 def createEmptyFolder(emptyFolderPath):
-    print("Creating new folder: " + emptyFolderPath)
+    LOGGER.info("Creating new folder: %s", emptyFolderPath)
     result = omni.client.create_folder(emptyFolderPath)
-    
-    print("Finished [" + result.name + "]")
+
+    LOGGER.info("Finished (this may be an error if the folder already exists) [ %s ]", result.name)
+
 
 # from https://stackoverflow.com/questions/510357/how-to-read-a-single-character-from-the-user
 def getChar():
@@ -309,12 +425,14 @@ def getChar():
 
     return getChar._func()
 
-def liveEdit(meshIn, stageUrl):
+
+def run_live_edit(prim, stageUrl):
     angle = 0
     omni.client.usd_live_wait_for_pending_updates()
-    print("Begin Live Edit - Press 't' to move the box\nPress 'q' or escape to quit\n")
+    prim_path = prim.GetPath()
+    LOGGER.info(f"Begin Live Edit on {prim_path} - Press 't' to move the box\nPress 'q' or escape to quit\n")
 
-    while (True):
+    while True:
         option = getChar()
         omni.client.usd_live_wait_for_pending_updates()
         if option == b't':
@@ -323,60 +441,33 @@ def liveEdit(meshIn, stageUrl):
             x = math.sin(radians) * 100.0
             y = math.cos(radians) * 100.0
 
-            xForm = meshIn
+            # Get srt transform from prim
+            translate, rot_xyz, scale = xform_utils.get_srt_xform_from_prim(prim)
 
-            position = Gf.Vec3d(0, 0, 0)
-            rotZYX = Gf.Vec3f(0, 0, 0)
-            scale = Gf.Vec3f(1, 1, 1)
+            # Translate and rotate
+            translate += Gf.Vec3d(x, 0.0, y)
+            rot_xyz = Gf.Vec3d(rot_xyz[0], angle, rot_xyz[2])
 
-            translateOp = None
-            rotateOp = None
-            scaleOp = None
-
-            xFormOps = xForm.GetOrderedXformOps()
-            for xop in xFormOps:
-                if xop.GetOpType() == UsdGeom.XformOp.TypeTranslate:
-                    translateOp = xop
-                    position = translateOp.Get()
-                if xop.GetOpType() == UsdGeom.XformOp.TypeRotateZYX:
-                    rotateOp = xop
-                    rotZYX = rotateOp.Get()
-                if xop.GetOpType() == UsdGeom.XformOp.TypeScale:
-                    scaleOp = xop
-                    scale = scaleOp.Get()
-
-            position += Gf.Vec3d(x, 0.0, y)
-            rotZYX = Gf.Vec3f(rotZYX[0], angle, rotZYX[2])
-
-            def setOp(xForm, op, opType, value, precision):
-                if not op:
-                    op = xForm.AddXformOp(opType, precision)
-                    print(" Adding ", UsdGeom.XformOp.GetOpTypeToken(opType))
-
-                if op.GetPrecision() == UsdGeom.XformOp.PrecisionFloat:
-                    op.Set(Gf.Vec3f(value))
-                else:
-                    op.Set(value)
-
-                print(" Setting ", UsdGeom.XformOp.GetOpTypeToken(opType))
-
-                return op
-
-            translateOp = setOp(xForm, translateOp, UsdGeom.XformOp.TypeTranslate, position, UsdGeom.XformOp.PrecisionDouble)
-            rotateOp = setOp(xForm, rotateOp, UsdGeom.XformOp.TypeRotateZYX, rotZYX, UsdGeom.XformOp.PrecisionFloat)
-            scaleOp = setOp(xForm, scaleOp, UsdGeom.XformOp.TypeScale, scale, UsdGeom.XformOp.PrecisionFloat)
-
-            ops = [translateOp, rotateOp, scaleOp]
-
-            xForm.SetXformOpOrder(ops)
-
-            saveStage(stageUrl)
+            #print(help(translate))
+            LOGGER.info(f"Setting pos [{translate[0]:.2f}, {translate[1]:.2f}, {translate[2]:.2f}] and rot [{rot_xyz[0]:.2f}, {rot_xyz[1]:.2f}, {rot_xyz[2]:.2f}]")
+            
+            # Set srt transform
+            srt_action = xform_utils.TransformPrimSRT(
+                stage,
+                prim.GetPath(),
+                translation=translate,
+                rotation_euler=rot_xyz,
+                rotation_order=Gf.Vec3i(0, 1, 2),
+                scale=scale,
+            )
+            srt_action.do()
+            save_stage(stageUrl)
 
         elif option == b'q' or option == chr(27).encode():
-            print("Live edit complete")
+            LOGGER.info("Live edit complete")
             break
         else:
-            print("Enter 't' to transform or 'q' to quit.")
+            LOGGER.info("Enter 't' to transform or 'q' to quit.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Python Omniverse Client Sample",
@@ -389,34 +480,51 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    existingStage = args.existing
-    doLiveEdit = args.live or bool(existingStage)
-    destinationPath = args.path
-    loggingEnabled = args.verbose
+    existing_stage = args.existing
+    live_edit = args.live or bool(existing_stage)
+    destination_path = args.path
+    logging_enabled = args.verbose
 
-    startOmniverse(doLiveEdit)
+    startOmniverse(live_edit)
 
-    if destinationPath and not isValidOmniUrl(destinationPath):
-        print("This is not an Omniverse Nucleus URL: " + destinationPath)
-        print("Correct Omniverse URL format is: omniverse://server_name/Path/To/Example/Folder")
-        print("Allowing program to continue because file paths may be provided in the form: C:/Path/To/Stage")
+    if destination_path and not isValidOmniUrl(destination_path):
+        msg = ("This is not an Omniverse Nucleus URL: %s"
+                "Correct Omniverse URL format is: omniverse://server_name/Path/To/Example/Folder"
+                "Allowing program to continue because file paths may be provided in the form: C:/Path/To/Stage")
+        LOGGER.warning(msg, destination_path)
 
-    if existingStage and not isValidOmniUrl(existingStage):
-        print("This is not an Omniverse Nucleus URL: " + existingStage)
-        print("Correct Omniverse URL format is: omniverse://server_name/Path/To/Example/Folder/helloWorld_py.usd")
-        print("Allowing program to continue because file paths may be provided in the form: C:/Path/To/Stage/helloWorld_py.usd")
+    if existing_stage and not isValidOmniUrl(existing_stage):
+        msg = ("This is not an Omniverse Nucleus URL: %s"
+                "Correct Omniverse URL format is: omniverse://server_name/Path/To/Example/Folder/helloWorld_py.usd"
+                "Allowing program to continue because file paths may be provided in the form: C:/Path/To/Stage/helloWorld_py.usd")
+        LOGGER.warning(msg, existing_stage)
 
-    boxMesh = None 
+    boxMesh = None
 
-    if not existingStage:
+    if not existing_stage:
         # Create the USD model in Omniverse
-        stageUrl = createOmniverseModel(destinationPath)
+        stageUrl = createOmniverseModel(destination_path)
 
-        # Print the username for the server
-        printConnectedUsername(stageUrl)
+        # Log the username for the server
+        logConnectedUsername(stageUrl)
+
+        rootUrl = '/Root'
+        UsdGeom.Xform.Define(stage, rootUrl)
+        # Define the defaultPrim as the /Root prim
+        rootPrim = stage.GetPrimAtPath(rootUrl)
+        stage.SetDefaultPrim(rootPrim)
+
+        # Create physics scene
+        createPhysicsScene(rootUrl)
 
         # Create box geometry in the model
-        boxMesh = createBox(stageUrl)
+        boxMesh = createBox(stageUrl, rootUrl)
+
+        # Create dynamic cube
+        createDynamicCube(stageUrl, rootUrl, 100.0)
+
+        # Create quad - static tri mesh collision so that the box collides with it
+        createQuad(stageUrl, rootUrl, 500.0)
 
         # Add a Nucleus Checkpoint to the stage
         checkpointFile(stageUrl, "Add box and nothing else")
@@ -429,7 +537,7 @@ if __name__ == "__main__":
         checkpointFile(stageUrl, "Add lights to stage")
 
         # Upload a material and textures to the Omniverse server
-        uploadMaterial(destinationPath)
+        uploadMaterial(destination_path)
 
         # Add a material to the box
         createMaterial(boxMesh, stageUrl)
@@ -438,18 +546,18 @@ if __name__ == "__main__":
         checkpointFile(stageUrl, "Add material to the box")
 
         # Create an empty folder, just as an example
-        createEmptyFolder(destinationPath + "/EmptyFolder")
+        createEmptyFolder(destination_path + "/EmptyFolder")
     else:
-        stageUrl = existingStage
-        print("Stage url:", stageUrl)
-        boxMesh = findGeomMesh(existingStage)
+        stageUrl = existing_stage
+        LOGGER.debug("Stage url: %s", stageUrl)
+        boxMesh = findGeomMesh(existing_stage)
 
     if not boxMesh:
         sys.exit("[ERROR] Unable to create or find mesh")
     else:
-        print("Mesh created/found successfully")
+        LOGGER.debug("Mesh created/found successfully")
 
-    if doLiveEdit and boxMesh is not None:
-        liveEdit(boxMesh, stageUrl)
+    if live_edit and boxMesh is not None:
+        run_live_edit(boxMesh.GetPrim(), stageUrl)
 
     shutdownOmniverse()

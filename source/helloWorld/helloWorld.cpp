@@ -26,7 +26,10 @@
 # This "helloworld" sample demonstrates how to:
 #  * connect to an Omniverse server
 #  * create a USD stage
-#  * create a polygonal box and add it to the stage
+#  * create a physics scene to define simulation parameters
+#  * create a polygonal box and add it to the stage and make it a dynamic rigid
+#  * create a cube and add it to the stage and make it a dynamic rigid
+#  * create a quad and add it to the stage and make it a collider
 #  * upload an MDL material and its textures to an Omniverse server
 #  * bind an MDL and USD Preview Surface material to the box
 #  * add a light to the stage
@@ -76,11 +79,19 @@
 #include "pxr/usd/usdShade/input.h"
 #include "pxr/usd/usdShade/output.h"
 #include <pxr/usd/usdGeom/xform.h>
+#include <pxr/usd/usdGeom/cube.h>
 #include "pxr/usd/usdShade/materialBindingAPI.h"
 #include <pxr/usd/usdLux/distantLight.h>
 #include <pxr/usd/usdLux/domeLight.h>
 #include <pxr/usd/usdShade/shader.h>
 #include <pxr/usd/usd/modelAPI.h>
+
+// Physics includes, note that usdPhysics is now part of USD itself, 
+// in newer USD versions these includes will be replaced by pxr official usdPhysics schema
+#include <usdPhysics/scene.h>
+#include <usdPhysics/rigidBodyAPI.h>
+#include <usdPhysics/collisionAPI.h>
+#include <usdPhysics/meshCollisionAPI.h>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -245,6 +256,9 @@ static std::string createOmniverseModel(const std::string& destinationPath)
 	// Always a good idea to declare your up-ness
 	UsdGeomSetStageUpAxis(gStage, UsdGeomTokens->y);
 
+	// For physics its important to set units!
+	UsdGeomSetStageMetersPerUnit(gStage, 0.01);
+
 	return stageUrl;
 }
 
@@ -300,6 +314,115 @@ static void printConnectedUsername(const std::string& stageUrl)
 	}
 }
 
+static void createPhysicsScene(const SdfPath& rootPrimPath)
+{
+	std::string sceneName("physicsScene");
+	const SdfPath scenePrimPath = rootPrimPath.AppendChild(TfToken(sceneName));
+
+	// Create physics scene, note that we dont have to specify gravity
+	// the default value is derived based on the scene up Axis and meters per unit.
+	// Hence in this case the gravity would be (0.0, -981.0, 0.0) since we have
+	// defined the Y up-axis and we are having a scene in centimeters.
+	UsdPhysicsScene::Define(gStage, scenePrimPath);
+}
+
+static void enablePhysics(const UsdPrim& prim, bool dynamic)
+{
+	if (dynamic)
+	{
+		// Make the cube a physics rigid body dynamic
+		UsdPhysicsRigidBodyAPI::Apply(prim);
+	}
+
+	// Add collision
+	UsdPhysicsCollisionAPI::Apply(prim);
+
+	if (prim.IsA<UsdGeomMesh>())
+	{
+		UsdPhysicsMeshCollisionAPI meshCollisionAPI = UsdPhysicsMeshCollisionAPI::Apply(prim);
+		if (dynamic)
+		{
+			// set mesh approximation to convexHull for dynamic meshes
+			meshCollisionAPI.GetApproximationAttr().Set(UsdPhysicsTokens->convexHull);
+		}
+		else
+		{
+			// set mesh approximation to none - triangle mesh as is will be used
+			meshCollisionAPI.GetApproximationAttr().Set(UsdPhysicsTokens->none);
+		}
+	}
+}
+
+static void createDynamicCube(const SdfPath& rootPrimPath, double size)
+{
+	// Create the geometry inside of "Root"
+	std::string cubeName("cube");
+	const SdfPath cubePrimPath = rootPrimPath.AppendChild(TfToken(cubeName));
+	UsdGeomCube cube = UsdGeomCube::Define(gStage, cubePrimPath);
+
+	if (!cube)
+		return;
+
+	// Move it up
+	cube.AddTranslateOp(UsdGeomXformOp::PrecisionFloat).Set(GfVec3f(65.0f, 300.0f, 65.0f));
+
+	cube.GetSizeAttr().Set(size);
+
+	enablePhysics(cube.GetPrim(), true);
+
+	// Commit the changes to the USD
+	gStage->Save();
+	omniUsdLiveProcess();
+}
+
+// Create a simple quad in USD with normals and add a collider
+static void createQuad(const SdfPath& rootPrimPath, double size)
+{
+	// Create the geometry inside of "Root"
+	std::string quadName("quad");
+	const SdfPath quadPrimPath = rootPrimPath.AppendChild(TfToken(quadName));
+	UsdGeomMesh mesh = UsdGeomMesh::Define(gStage, quadPrimPath);
+
+	if (!mesh)
+		return;
+
+	// Set orientation
+	mesh.CreateOrientationAttr(VtValue(UsdGeomTokens->rightHanded));
+
+	// Add all of the vertices
+	VtArray<GfVec3f> points = { 
+		GfVec3f(-size, 0.0, -size),
+		GfVec3f(-size, 0.0, size),
+		GfVec3f(size, 0.0, size), 
+		GfVec3f(size, 0.0, -size), 
+	};
+	mesh.CreatePointsAttr(VtValue(points));
+
+	// Calculate indices for each triangle
+	VtArray<int> vecIndices = { 0, 1, 2, 3 };
+	mesh.CreateFaceVertexIndicesAttr(VtValue(vecIndices));
+
+	// Add vertex normals	
+	VtArray<GfVec3f> meshNormals = { 
+		GfVec3f(0.0, 0.0, 1.0),
+		GfVec3f(0.0, 0.0, 1.0),
+		GfVec3f(0.0, 0.0, 1.0), 
+		GfVec3f(0.0, 0.0, 1.0) 
+	};
+	mesh.CreateNormalsAttr(VtValue(meshNormals));
+
+	// Add face vertex count
+	VtArray<int> faceVertexCounts = { 4 };
+	mesh.CreateFaceVertexCountsAttr(VtValue(faceVertexCounts));
+
+	// set is as a static triangle mesh
+	enablePhysics(mesh.GetPrim(), false);
+
+	// Commit the changes to the USD
+	gStage->Save();
+	omniUsdLiveProcess();
+}
+
 // Create a simple box in USD with normals and UV information
 double h = 50.0;
 int gBoxVertexIndices[] = { 0, 1, 2, 1, 3, 2, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23 };
@@ -307,16 +430,8 @@ double gBoxNormals[][3] = { {0, 0, -1}, {0, 0, -1}, {0, 0, -1}, {0, 0, -1}, {0, 
 double gBoxPoints[][3] = { {h, -h, -h}, {-h, -h, -h}, {h, h, -h}, {-h, h, -h}, {h, h, h}, {-h, h, h}, {-h, -h, h}, {h, -h, h}, {h, -h, h}, {-h, -h, h}, {-h, -h, -h}, {h, -h, -h}, {h, h, h}, {h, -h, h}, {h, -h, -h}, {h, h, -h}, {-h, h, h}, {h, h, h}, {h, h, -h}, {-h, h, -h}, {-h, -h, h}, {-h, h, h}, {-h, h, -h}, {-h, -h, -h} };
 float gBoxUV[][2] = { {0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {0, 1}, {1, 1}, {1, 0} };
 
-static UsdGeomMesh createBox(int boxNumber=0)
+static UsdGeomMesh createBox(const SdfPath& rootPrimPath, int boxNumber=0)
 {
-	// Keep the model contained inside of "Root", only need to do this once per model
-	SdfPath rootPrimPath = SdfPath::AbsoluteRootPath().AppendChild(_tokens->Root);
-	UsdGeomXform::Define(gStage, rootPrimPath);
-
-	// Define the defaultPrim as the /Root prim
-	UsdPrim rootPrim = gStage->GetPrimAtPath(rootPrimPath);
-	gStage->SetDefaultPrim(rootPrim);
-
 	// Create the geometry inside of "Root"
 	std::string boxName("box_");
 	boxName.append(std::to_string(boxNumber));
@@ -389,6 +504,13 @@ static UsdGeomMesh createBox(int boxNumber=0)
 		bool status = attr2.Set(valueArray);
 	}
 	attr2.SetInterpolation(UsdGeomTokens->vertex);
+
+	// Move it up
+	mesh.AddTranslateOp(UsdGeomXformOp::PrecisionDouble).Set(GfVec3d(0.0f, 100.0f, 0.0f));
+	mesh.AddRotateXYZOp(UsdGeomXformOp::PrecisionDouble).Set(GfVec3d(20.0, 0.0, 20.0));
+
+	// Make the cube a physics rigid body dynamic
+	enablePhysics(mesh.GetPrim(), true);
 
 	// Commit the changes to the USD
 	gStage->Save();
@@ -594,9 +716,9 @@ static void createDomeLight(const std::string& texturePath)
 	// Set rotation on domelight
 	UsdGeomXformable xForm = newLight;
 	UsdGeomXformOp rotateOp;
-	GfVec3f rotZYX(270, 0, 0);
-	rotateOp = xForm.AddXformOp(UsdGeomXformOp::TypeRotateZYX, UsdGeomXformOp::Precision::PrecisionFloat);
-	rotateOp.Set(rotZYX);
+	GfVec3d rotXYZ(270, 0, 0);
+	rotateOp = xForm.AddXformOp(UsdGeomXformOp::TypeRotateXYZ, UsdGeomXformOp::Precision::PrecisionDouble);
+	rotateOp.Set(rotXYZ);
 
 	// Commit the changes to the USD
 	gStage->Save();
@@ -635,7 +757,7 @@ static void liveEdit(UsdGeomMesh meshIn)
 	omniUsdLiveWaitForPendingUpdates();
 	{
 		std::unique_lock<std::mutex> lk(gLogMutex);
-		std::cout << "Begin Live Edit - ";
+		std::cout << "Begin Live Edit on " << meshIn.GetPath() << " - ";
 		std::cout << "Press 't' to move the box\nPress 'q' or escape to quit\n";
 	}
 
@@ -669,8 +791,8 @@ static void liveEdit(UsdGeomMesh meshIn)
 			UsdGeomXformOp rotateOp;
 			UsdGeomXformOp scaleOp;
 			GfVec3d position(0);
-			GfVec3f rotZYX(0);
-			GfVec3f scale(1);
+			GfVec3d rotXYZ(0);
+			GfVec3d scale(1);
 
 			// Get the xform ops stack
 			bool resetXformStack = false;
@@ -684,9 +806,9 @@ static void liveEdit(UsdGeomMesh meshIn)
 					translateOp = xFormOps[i];
 					translateOp.Get(&position);
 					break;
-				case UsdGeomXformOp::TypeRotateZYX:
+				case UsdGeomXformOp::TypeRotateXYZ:
 					rotateOp = xFormOps[i];
-					rotateOp.Get(&rotZYX);
+					rotateOp.Get(&rotXYZ);
 					break;
 				case UsdGeomXformOp::TypeScale:
 					scaleOp = xFormOps[i];
@@ -697,7 +819,7 @@ static void liveEdit(UsdGeomMesh meshIn)
 
 			// Move/Rotate the existing position/rotation - this works for Y-up stages
 			position += GfVec3d(x, 0, y);
-			rotZYX = GfVec3f(rotZYX[0], angle, rotZYX[2]);
+			rotXYZ = GfVec3d(rotXYZ[0], angle, rotXYZ[2]);
 
 			// A utility class to set the position, rotation, or scale values
 			class SetOp
@@ -713,7 +835,7 @@ static void liveEdit(UsdGeomMesh meshIn)
 					}
 
 					if (op.GetPrecision() == UsdGeomXformOp::Precision::PrecisionFloat)
-						op.Set(GfVec3f(value));
+						op.Set(GfVec3d(value));
 					else
 						op.Set(value);
 
@@ -723,8 +845,8 @@ static void liveEdit(UsdGeomMesh meshIn)
 			};
 
 			SetOp(xForm, translateOp, UsdGeomXformOp::TypeTranslate, position, UsdGeomXformOp::Precision::PrecisionDouble);
-			SetOp(xForm, rotateOp, UsdGeomXformOp::TypeRotateZYX, rotZYX, UsdGeomXformOp::Precision::PrecisionFloat);
-			SetOp(xForm, scaleOp, UsdGeomXformOp::TypeScale, scale, UsdGeomXformOp::Precision::PrecisionFloat);
+			SetOp(xForm, rotateOp, UsdGeomXformOp::TypeRotateXYZ, rotXYZ, UsdGeomXformOp::Precision::PrecisionDouble);
+			SetOp(xForm, scaleOp, UsdGeomXformOp::TypeScale, scale, UsdGeomXformOp::Precision::PrecisionDouble);
 
 			// Make sure the xform op order is correct (translate, rotate, scale)
 			std::vector<UsdGeomXformOp> xFormOpsReordered;
@@ -856,8 +978,24 @@ int main(int argc, char*argv[])
 		// Print the username for the server
 		printConnectedUsername(stageUrl);
 
+		// Keep the model contained inside of "Root", only need to do this once per model
+		const SdfPath rootPrimPath = SdfPath::AbsoluteRootPath().AppendChild(_tokens->Root);
+		UsdGeomXform rootPrim = UsdGeomXform::Define(gStage, rootPrimPath);
+
+		// Define the defaultPrim as the /Root prim
+		gStage->SetDefaultPrim(rootPrim.GetPrim());
+
+		// Create physics scene
+		createPhysicsScene(rootPrimPath);
+
 		// Create box geometry in the model
-		boxMesh = createBox();
+		boxMesh = createBox(rootPrimPath);
+
+		// Create dynamic cube
+		createDynamicCube(rootPrimPath, 100.0);
+
+		// Create quad - static tri mesh collision so that the box collides with it
+		createQuad(rootPrimPath, 500.0);
 
 		checkpointFile(stageUrl, "Add box and nothing else");
 

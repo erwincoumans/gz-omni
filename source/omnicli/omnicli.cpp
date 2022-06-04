@@ -397,6 +397,7 @@ int stat(ArgVec const& args)
 		printf(
 			"Created: %s by %s\n", formatTime(entry->createdTimeNs), entry->createdBy ? entry->createdBy : "Unknown");
 		printf("Version: %s\n", entry->version ? entry->version : "Not Supported");
+		printf("Hash: %s\n", entry->hash ? entry->hash : "Not Supported");
 		}));
 	return retCode;
 }
@@ -619,6 +620,12 @@ int cat(ArgVec const& args)
 		}
 	}));
 	return retCode;
+}
+
+int clientVersion(ArgVec const& args)
+{
+	printf("%s\n", omniClientGetVersionString());
+	return EXIT_SUCCESS;
 }
 
 int serverVersion(ArgVec const& args)
@@ -1093,6 +1100,9 @@ struct Command
 	char const* helpMessage;
 	CommandFn function;
 };
+
+// A new line (\n) in the message string results in the string that follows it 
+// to be printed on a second line
 Command commands[] = {
 	{ "help", nullptr, "Print this help message", help },
 	{ "-h", nullptr, nullptr, help },
@@ -1104,7 +1114,7 @@ Command commands[] = {
 	{ "dir", nullptr, nullptr, list },
 	{ "stat", "<url>", "Print information about a specified file or folder", stat },
 	{ "cd", "<url>", "Makes paths relative to the specified folder", cd },
-	{ "push", "<url>", "Makes paths relative to the specified folder, you can restore the original folder with pop", push },
+	{ "push", "<url>", "Makes paths relative to the specified folder\n You can restore the original folder with pop", push },
 	{ "pushd", nullptr, nullptr, push },
 	{ "pop", nullptr, "Restores a folder pushed with 'push'", pop },
 	{ "popd", nullptr, nullptr, pop },
@@ -1117,31 +1127,71 @@ Command commands[] = {
 	{ "rm", nullptr, nullptr, del },
 	{ "mkdir", "<url>", "Create a folder", mkdir },
 	{ "cat", "<url>", "Print the contents of a file", cat },
+	{ "cver", "<url>", "Print the client version", clientVersion},
 	{ "sver", "<url>", "Print the server version", serverVersion},
 	{ "load", "<url>", "Load a USD file", loadUsd },
 	{ "save", "[url]", "Save a previously loaded USD file (optionally to a different URL)", saveUsd },
-	{ "close", "", "Close a previously loaded USD file", closeUsd },
+	{ "close", nullptr, "Close a previously loaded USD file", closeUsd },
 	{ "live", "[on|off]", "Turn live mode on/off", live },
 	{ "lock", "[url]", "Lock a USD file (defaults to loaded stage root)", lock },
 	{ "unlock", "[url]", "Unlock a USD file (defaults to loaded stage root)", unlock },
 	{ "getacls", "<url>", "Print the ACLs for a URL", getacls },
-	{ "setacls", "<url> <user|group> <r|w|a|->", "Change the ACLs for a user or group for a URL; specify '-' to remove that user|group from the ACLs", setacls },
-	{ "auth", "[username] [password]", "Set username/password for authentication; password defaults to username; blank reverts to standard auth", auth },
+	{ "setacls", "<url> <user|group> <r|w|a|->", "Change the ACLs for a user or group for a URL\n Specify '-' to remove that user|group from the ACLs", setacls },
+	{ "auth", "[username] [password]", "Set username/password for authentication\n Password defaults to username; blank reverts to standard auth", auth },
 	{ "checkpoint", "<url> [comment]", "Create a checkpoint of a URL", makeCheckpoint },
 	{ "listCheckpoints", "<url>", "List all checkpoints of a URL", listCheckpoints },
 	{ "restoreCheckpoint", "<url>", "Restore a checkpoint", restoreCheckpoint },
-	{ "disconnect", "<url>", "Disconnect from a server", disconnect }
+	{ "disconnect", "<url>", "Disconnect from a server", disconnect },
 };
 
 int help(ArgVec const& args)
 {
+	// Constants used in the formatting of the help message
+	// Calculate the length of the longest "command <argument>" string
+	size_t paddingCmdString = 0;
+	for (auto&& command : commands)
+	{
+		paddingCmdString = std::max(paddingCmdString, strlen(command.name) + (command.args ? strlen(command.args) : 0) + 1);
+	}
+	std::string div(" : ");
+	const auto paddingHelpString(paddingCmdString + div.size() + 1);
+
 	for (auto&& command : commands)
 	{
 		if (command.helpMessage == nullptr)
 		{
 			continue;
 		}
-		printf("%10s : %s\n", command.name, command.helpMessage);
+
+		// Formatting: 
+		// - 2 leading spaces, 
+		// - "command <arg>" string is left justified and padded to align all help strings, 
+		// - first "\n" in helpMessage breaks line 
+		std::string cmdNameAndArg(command.name);
+		if (command.args != nullptr)
+		{
+			// Concatenate command and argument strings
+			cmdNameAndArg += " ";
+			cmdNameAndArg.append(command.args);
+		}
+
+		// Pad command_and_argument string so all ":" chars are aligned
+		if (cmdNameAndArg.size() < paddingCmdString)
+		{
+			cmdNameAndArg += std::string(paddingCmdString - cmdNameAndArg.size(), ' ');
+		}
+
+		// Break help message at first "\n" character and print on 2 lines (subsequent "\n" are ignored)
+		std::string helpMessage(command.helpMessage);
+		auto pos = helpMessage.find("\n");
+		if (pos != std::string::npos)
+		{
+			printf("  %s%s%s\n%s\n", cmdNameAndArg.c_str(), div.c_str(), helpMessage.substr(0, pos).c_str(), (std::string(paddingHelpString, ' ') + helpMessage.substr(pos + 1)).c_str());
+		}
+		else
+		{
+			printf("  %s%s%s\n", cmdNameAndArg.c_str(), div.c_str(), command.helpMessage);
+		}
 	}
 	return EXIT_SUCCESS;
 }

@@ -72,11 +72,27 @@ workspace "Samples"
     -- adding dependencies
     filter { "system:linux" }
         linkoptions { '-Wl,--disable-new-dtags -Wl,-rpath,../../../_build/target-deps/nv_usd/%{cfg.buildcfg}/lib:../../../_build/target-deps/omni_client_library/%{cfg.buildcfg}:../../../_build/target-deps/python/lib:' }
-        includedirs { targetDepsDir.."/nv_usd/%{cfg.buildcfg}/include", targetDepsDir.."/omni_client_library/include", targetDepsDir.."/python/include/python3.7m" }
-        libdirs { targetDepsDir.."/nv_usd/%{cfg.buildcfg}/lib", targetDepsDir.."/omni_client_library/%{cfg.buildcfg}", targetDepsDir.."/python/lib" }
+        includedirs { 
+            targetDepsDir.."/nv_usd/%{cfg.buildcfg}/include", 
+            targetDepsDir.."/usd_ext_physics/%{cfg.buildcfg}/include", 
+            targetDepsDir.."/omni_client_library/include", 
+            targetDepsDir.."/python/include/python3.7m" }
+        libdirs { 
+            targetDepsDir.."/nv_usd/%{cfg.buildcfg}/lib", 
+            targetDepsDir.."/usd_ext_physics/%{cfg.buildcfg}/lib", 
+            targetDepsDir.."/omni_client_library/%{cfg.buildcfg}", 
+            targetDepsDir.."/python/lib" }
     filter { "system:windows" }
-        includedirs { targetDepsDir.."/nv_usd/%{cfg.buildcfg}/include", targetDepsDir.."/omni_client_library/include", targetDepsDir.."/python/include" }
-        libdirs { targetDepsDir.."/nv_usd/%{cfg.buildcfg}/lib", targetDepsDir.."/omni_client_library/%{cfg.buildcfg}", targetDepsDir.."/python/lib" }
+        includedirs { 
+            targetDepsDir.."/nv_usd/%{cfg.buildcfg}/include", 
+            targetDepsDir.."/usd_ext_physics/%{cfg.buildcfg}/include", 
+            targetDepsDir.."/omni_client_library/include", 
+            targetDepsDir.."/python/include" }
+        libdirs { 
+            targetDepsDir.."/nv_usd/%{cfg.buildcfg}/lib", 
+            targetDepsDir.."/usd_ext_physics/%{cfg.buildcfg}/lib", 
+            targetDepsDir.."/omni_client_library/%{cfg.buildcfg}", 
+            targetDepsDir.."/python/lib" }
     filter {}
 
     filter { "system:windows" }
@@ -145,11 +161,11 @@ function sample(projectName, sourceFolder)
     inlining "Explicit"
     flags { "NoManifest", "NoIncrementalLink", "NoPCH" }
     filter { "system:windows", "configurations:debug" }
-        links { "ar","arch","gf","js","kind","pcp","plug","sdf","tf","trace","usd","usdGeom", "vt","work","usdShade","usdLux","omniclient","python37","boost_python37-vc141-mt-gd-x64-1_68" }
+        links { "ar","arch","gf","js","kind","pcp","plug","sdf","tf","trace","usd","usdGeom", "vt","work","usdShade","usdLux","usdPhysics","omniclient","python37","boost_python37-vc141-mt-gd-x64-1_68" }
     filter { "system:windows", "configurations:release" }
-        links { "ar","arch","gf","js","kind","pcp","plug","sdf","tf","trace","usd","usdGeom", "vt","work","usdShade","usdLux","omniclient","python37","boost_python37-vc141-mt-x64-1_68" }
+        links { "ar","arch","gf","js","kind","pcp","plug","sdf","tf","trace","usd","usdGeom", "vt","work","usdShade","usdLux","usdPhysics","omniclient","python37","boost_python37-vc141-mt-x64-1_68" }
     filter { "system:linux" }
-        links { "ar","arch","gf","js","kind","pcp","plug","sdf","tf","trace","usd","usdGeom", "vt","work","usdShade","usdLux","omniclient","python3.7m","boost_python37", "pthread", "stdc++fs" }
+        links { "ar","arch","gf","js","kind","pcp","plug","sdf","tf","trace","usd","usdGeom", "vt","work","usdShade","usdLux","usdPhysics","omniclient","python3.7m","boost_python37", "pthread", "stdc++fs" }
     filter {}
     location (workspaceDir.."/%{prj.name}")
     files { "source/"..sourceFolder.."/**.*" }
@@ -161,3 +177,5 @@ end
 sample("HelloWorld", "helloWorld")
 sample("omnicli", "omnicli")
 sample("omniUsdaWatcher", "omniUsdaWatcher")
+sample("omniSimpleSensor", "omniSimpleSensor")
+sample("omniSensorThread", "omniSensorThread")

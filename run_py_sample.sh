@@ -8,7 +8,7 @@ echo Running script in ${SCRIPT_DIR}
 
 pushd $SCRIPT_DIR > /dev/null
 
-export USD_LIB_DIR=${SCRIPT_DIR}/_build/target-deps/nv_usd/release/lib
+export USD_LIB_DIR=${SCRIPT_DIR}/_build/linux-x86_64/release
 export OMNI_CLIENT_DIR=${SCRIPT_DIR}/_build/target-deps/omni_client_library/release
 export PYTHON=${SCRIPT_DIR}/_build/target-deps/python/python
 
